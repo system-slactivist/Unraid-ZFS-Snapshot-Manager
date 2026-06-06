@@ -86,6 +86,34 @@ run_restore() {
 }
 
 ####################
+# Function: send_with_progress
+# Pipes zfs send to zfs receive, inserting pv if available.
+####################
+send_with_progress() {
+    local snapshot="$1"
+    local receive_cmd="$2"
+    
+    # Try to get the estimated stream size to display percentage and ETA
+    local size=""
+    if size=$(zfs send -nvP "${snapshot}" 2>/dev/null | awk '$1=="size"{print $2}'); then
+        :
+    fi
+    
+    # Check if pv is installed
+    if ! command -v pv >/dev/null 2>&1; then
+        echo "Note: 'pv' command not found. Installing 'pv' (e.g. via NerdTools plugin) will show a progress bar."
+        eval "zfs send \"${snapshot}\" | ${receive_cmd}"
+        return $?
+    fi
+    
+    if [ -n "$size" ] && [ "$size" -gt 0 ] 2>/dev/null; then
+        eval "zfs send \"${snapshot}\" | pv -s \"${size}\" | ${receive_cmd}"
+    else
+        eval "zfs send \"${snapshot}\" | pv | ${receive_cmd}"
+    fi
+}
+
+####################
 # Function: select_snapshot
 # Allows user to select a specific snapshot to restore.
 ####################
@@ -140,12 +168,12 @@ restore_snapshot() {
 
     # Local restore
     if [[ "$destination_remote" == "no" ]]; then
+        local receive_cmd="zfs receive -F \"${dest}\""
         if [[ "$dry_run" == "yes" ]]; then
-            echo "DRY RUN: zfs send \"${latest_snapshot}\" | zfs receive -F \"${dest}\""
+            echo "DRY RUN: zfs send \"${latest_snapshot}\" | pv | ${receive_cmd}"
         else
             echo "Restoring locally → ${dest}"
-            if ! run_restore zfs send "${latest_snapshot}" \
-                 | run_restore zfs receive -F "${dest}"; then
+            if ! send_with_progress "${latest_snapshot}" "${receive_cmd}"; then
                 unraid_notify "Local restore failed: ${source_dataset}" "failure"
                 return 1
             fi
@@ -155,13 +183,13 @@ restore_snapshot() {
 
     # Remote restore
     if [[ "$destination_remote" == "yes" ]]; then
+        local receive_cmd="ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${dest}\""
         if [[ "$dry_run" == "yes" ]]; then
-            echo "DRY RUN: zfs send \"${latest_snapshot}\" | ssh ${remote_target} zfs receive -F \"${dest}\""
+            echo "DRY RUN: zfs send \"${latest_snapshot}\" | pv | ${receive_cmd}"
         else
             echo "Restoring remotely → ${remote_target}"
             ssh "${remote_user}@${remote_server}" "zfs create -p \"${dest}\"" 2>/dev/null || true
-            if ! run_restore zfs send "${latest_snapshot}" \
-                 | run_restore ssh "${remote_user}@${remote_server}" zfs receive -F "${dest}"; then
+            if ! send_with_progress "${latest_snapshot}" "${receive_cmd}"; then
                 unraid_notify "Remote restore failed: ${source_dataset}" "failure"
                 return 1
             fi
@@ -207,23 +235,23 @@ run_for_each_dataset() {
 
                 # LOCAL child
                 if [[ "$destination_remote" == "no" ]]; then
+                    local child_receive_cmd="zfs receive -F \"${child_dest}\""
                     if [[ "$dry_run" == "yes" ]]; then
-                        echo "DRY RUN: zfs send \"${child_snapshot}\" | zfs receive -F \"${child_dest}\""
+                        echo "DRY RUN: zfs send \"${child_snapshot}\" | pv | ${child_receive_cmd}"
                     else
-                        run_restore zfs send "${child_snapshot}" \
-                          | run_restore zfs receive -F "${child_dest}"
+                        send_with_progress "${child_snapshot}" "${child_receive_cmd}"
                         unraid_notify "Local child restore succeeded: ${child_source}" "success"
                     fi
                 fi
 
                 # REMOTE child
                 if [[ "$destination_remote" == "yes" ]]; then
+                    local child_receive_cmd="ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${child_dest}\""
                     if [[ "$dry_run" == "yes" ]]; then
-                        echo "DRY RUN: zfs send \"${child_snapshot}\" | ssh ${child_remote_target%:*} zfs receive -F \"${child_dest}\""
+                        echo "DRY RUN: zfs send \"${child_snapshot}\" | pv | ${child_receive_cmd}"
                     else
                         ssh "${remote_user}@${remote_server}" "zfs create -p \"${child_dest%/*}\"" 2>/dev/null || true
-                        run_restore zfs send "${child_snapshot}" \
-                          | run_restore ssh "${remote_user}@${remote_server}" zfs receive -F "${child_dest}"
+                        send_with_progress "${child_snapshot}" "${child_receive_cmd}"
                         unraid_notify "Remote child restore succeeded: ${child_source}" "success"
                     fi
                 fi
