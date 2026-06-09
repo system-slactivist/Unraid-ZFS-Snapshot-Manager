@@ -10,89 +10,24 @@ trap 'unraid_notify "Script terminated unexpectedly." "failure"' ERR
 # #   Modified by SystemSlactivist                                                                                                          # #
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+#####################
+# Configuration Loader
 ####################
-# Main Variables
-####################
+config_file="$(dirname "$0")/zfs_manager.conf"
+if [ ! -f "$config_file" ]; then
+  echo "Error: Configuration file '$config_file' not found."
+  echo "Please create it using zfs_manager.conf.example as a template."
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$config_file"
 
-####################
-# Logging Configuration
-####################
-log_file="/var/log/zfs_replication.log" # Path to the log file
-log_max_size_mb="5"                     # Max size of log file before rotating
-log_backups="3"                         # Number of rotated backups to keep
-
-####################
-# Dry-Run
-# Enable simulation mode so the script reports intended actions without actually creating snapshots, pruning, or replicating.
-####################
-dry_run="no" # Set to "yes" to run in dry‑run mode, or "no" to perform real operations.
-
-####################
-# Unraid Notifications Configuration
-# Configure how and when notifications are sent to the Unraid GUI.
-####################
-notification_type="all" # "all" for both success & failure, "error" for only failure, "none" for no notifications
-
-####################
-# ZFS Dataset Configuration
-# Define the ZFS datasets (and their pools) that you want to process.
-####################
-source_datasets=("cache/appdata" "cache/unraid_scripts" "cache/compose") # Add all the pools/datasets you want to process here e.g. ("pool1/dataset1" "pool1/dataset2" "pool2/dataset3")
-
-####################
-# ZFS Snapshot Settings
-# Enable having automatic snapshot capture and cleanup.
-# Set the retention policy for ZFS snapshots.
-####################
-auto_snapshots="yes"      # Set to "yes" to automatically take snapshots when the script is ran or "no" to skip.
-autoprune_snapshots="yes" # Set to "yes" to automatically remove snapshots beyond the retention policy set to "no" to disable retention and keep snapshots forever.
-
-####################
-# Retention policy
-####################
-snapshot_hours="0"  # Number of hourly snapshots to keep (0 = none)
-snapshot_days="7"   # Number of daily snapshots to keep (0 = none)
-snapshot_weeks="4"  # Number of weekly snapshots to keep (0 = none)
-snapshot_months="3" # Number of monthly snapshots to keep (0 = none)
-snapshot_years="0"  # Number of yearly snapshots to keep (0 = none)
-
-####################
-# Replication Settings
-# Requires having a second ZFS pool that is either local or remote
-####################
-replication="yes" # Choose between "yes" for ZFS replication or "no" for just using snapshots.
-
-####################
-# Remote Server Configuration
-# Configure settings if you plan to replicate data to a remote server.
-####################
-destination_remote="no"      # Set to "no" for local backup, "yes" for a remote backup or "both" to replicate locally and remotely.
-remote_user="root"           # Remote server user (Unraid server typically uses "root")
-remote_server="10.10.20.197" # Remote server's name or IP address
-
-####################
-# Replication Variables
-# Remote or local variable will be ignored depending destination_remote value.
-####################
-destination_local_dataset="disk20/BACKUP_zfs"         # Local parent dataset under which the replicated data will reside (e.g. "pool/dataset")
-destination_remote_dataset="vault/replication_remote" # Remote parent dataset under which the replicated data will reside (e.g. "pool/dataset")
-
-####################
-# Syncoid replication mode:
-# "strict-mirror" - Mirrors the source dataset strictly, deleting snapshots in the destination that are not in the source.
-# "basic" - Basic replication without extra flags; does not delete snapshots in the destination that are missing from the source.
-####################
-syncoid_mode="strict-mirror"
-
-####################
-# Advanced Variables
-# These settings are typically set correctly by default and do not need to be changed.
-####################
-sanoid_config_dir="/mnt/user/system/sanoid/" # Location of the Sanoid configuration directory
+# Map unified log variables
+log_file="$replication_log_file"
 
 ####################
 # Main Script
-####################
+######################
 
 log_message() {
   local level="$1"
@@ -175,6 +110,65 @@ unraid_notify() {
   fi
 
   /usr/local/emhttp/webGui/scripts/notify -s "Backup Notification" -d "$message" -i "$severity"
+}
+
+####################
+# Function: discord_notify
+# Sends status updates to a Discord channel via Webhook.
+# Usage: discord_notify "<success|failure>" "<message>"
+####################
+discord_notify() {
+  local overall_status="$1"
+  local summary_msg="$2"
+
+  if [[ "${discord_notifications:-no}" != "yes" ]]; then
+    return 0
+  fi
+
+  if [[ -z "${discord_webhook_url:-}" || "$discord_webhook_url" == *"YOUR_WEBHOOK_HERE"* ]]; then
+    log_warn "Discord notifications are enabled but no valid webhook URL is set."
+    return 0
+  fi
+
+  # Determine embed color and status icon/title
+  local color
+  local title
+  if [[ "$overall_status" == "success" ]]; then
+    color=3066993 # Green (#2ECC71)
+    title="✅ ZFS Snapshot & Replication: Success"
+  else
+    color=15158332 # Red (#E74C3C)
+    title="❌ ZFS Snapshot & Replication: Failed"
+  fi
+
+  # Escape the description for JSON payload
+  local escaped_summary
+  escaped_summary=$(echo "$summary_msg" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed 's/$/\\n/g' | tr -d '\n')
+
+  local payload
+  payload=$(cat <<EOF
+{
+  "embeds": [
+    {
+      "title": "${title}",
+      "description": "${escaped_summary}",
+      "color": ${color},
+      "footer": {
+        "text": "Unraid ZFS Snapshot Manager"
+      },
+      "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    }
+  ]
+}
+EOF
+)
+
+  log_info "Sending status notification to Discord..."
+  if curl -sSL -H "Content-Type: application/json" -X POST -d "$payload" "$discord_webhook_url" >> "$log_file" 2>&1; then
+    log_info "Discord notification sent successfully."
+  else
+    log_error "Failed to send Discord notification."
+  fi
 }
 
 ####################
@@ -660,6 +654,7 @@ Dataset Results:
   done
   
   unraid_notify "${end_msg}" "${overall_status}"
+  discord_notify "${overall_status}" "${end_msg}"
 }
 
 ####################

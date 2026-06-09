@@ -35,6 +35,7 @@ graph TD
 | `ZFS_Replication.sh` | Main orchestration script. Performs backups, prunes snapshots, generates config files, and notifies Unraid GUI. | Reads state from disk, executes Sanoid/Syncoid commands. |
 | `ZFS_Restore.sh` | Restores datasets from local or remote snapshots interactively. | Prompts user on CLI, performs zfs send/receive pipeline. |
 | Sanoid Config | Temp directories: `/mnt/user/system/sanoid/[dataset_underscored]/` | Contains custom `sanoid.conf` and symlink to default settings. |
+| `zfs_manager.conf` | External configuration file holding all user-defined parameters and sensitive URLs. | Untracked config sourced by both scripts; gitignored. |
 
 ---
 

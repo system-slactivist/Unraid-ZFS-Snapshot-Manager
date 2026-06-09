@@ -43,9 +43,15 @@
 | `dry_run` | `"no"` / `"yes"` | Safety check flag |
 | `syncoid_mode` | `"strict-mirror"` | Can be `"strict-mirror"` or `"basic"` |
 | `auto_snapshots` | `"yes"` | Enable automatic snapshot generation |
-| `log_file` | `"/var/log/zfs_replication.log"` or `"/var/log/zfs_restore.log"` | User-defined log file path |
+| `replication_log_file` | `"/var/log/zfs_replication.log"` | Path to the ZFS replication script log |
+| `restore_log_file` | `"/var/log/zfs_restore.log"` | Path to the ZFS restore script log |
 | `log_max_size_mb` | `"5"` | Max log file size in MB before rotation |
 | `log_backups` | `"3"` | Number of rotated log backups to keep |
+| `restore_source_datasets` | `("cache/appdata")` | Array of source datasets to restore |
+| `restore_destination_dataset` | `"vault/replication"` | Parent backup dataset to restore from |
+| `restore_destination_remote` | `"no"` / `"yes"` | Restoring from a remote server flag |
+| `discord_notifications` | `"yes"` / `"no"` | Enable/disable Discord webhook alerts |
+| `discord_webhook_url` | `"https://discord.com/..."` | Target Discord channel Webhook URL |
 
 ---
 

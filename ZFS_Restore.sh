@@ -10,54 +10,22 @@ trap 'unraid_notify "Script terminated unexpectedly." "failure"' ERR
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 ####################
-# Configuration
+# Configuration Loader
 # ###################
+config_file="$(dirname "$0")/zfs_manager.conf"
+if [ ! -f "$config_file" ]; then
+  echo "Error: Configuration file '$config_file' not found."
+  echo "Please create it using zfs_manager.conf.example as a template."
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$config_file"
 
-####################
-# Logging Configuration
-# ###################
-log_file="/var/log/zfs_restore.log"     # Path to the log file
-log_max_size_mb="5"                     # Max size of log file before rotating
-log_backups="3"                         # Number of rotated backups to keep
-
-####################
-# Dry Run Mode
-# ###################
-# Set this to "yes" to simulate the restoration process without making any actual changes.
-# This is useful for testing and ensuring that the script is configured correctly.
-# Set this to "no" to perform the actual restoration.
-dry_run="yes"
-
-
-####################
-# Dataset(s) to Restore
-####################
-# This is an array where each entry is a ZFS dataset that you want to restore.
-# You can specify a parent dataset (which will restore it and all its children)
-# or a specific child dataset if you want to restore only that.
-# Example:
-#   - To restore a parent dataset and all its children: ("pool1/dataset1")
-#   - To restore only a specific child dataset: ("pool1/dataset1/child1")
-# In this example, we are restoring a dataset named "appdata" from the "cache" pool.
-source_datasets=("cache/appdata")
-
-####################
-# Backup to Restore From
-####################
-# This is the ZFS dataset or pool where your backup (snapshot) is stored.
-# You should replace this with the location of your backup dataset.
-# Example:
-#   - If your backup is stored in "pool1" and it is under the parent dataset "dataset1" set this to "pool1/dataset1"
-# In this example, we are restoring from the "replication" dataset in the "vault" pool.
-destination_dataset="vault/replication"
-
-####################
-# Remote Server Configuration
-# Configure settings if you plan to replicate data from a remote server.
-####################
-destination_remote="no"  # Set to "no" for local, "yes" for remote
-remote_user="root"       # Remote server user (Unraid server typically uses "root")
-remote_server="10.10.20.197" # Remote server's name or IP address
+# Map unified config variables
+log_file="$restore_log_file"
+source_datasets=("${restore_source_datasets[@]}")
+destination_dataset="$restore_destination_dataset"
+destination_remote="$restore_destination_remote"
 
 ####################
 # Main Script

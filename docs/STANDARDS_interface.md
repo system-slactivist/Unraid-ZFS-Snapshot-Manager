@@ -23,6 +23,15 @@
 | `-d` | Custom multi-line string containing status of datasets | Description details |
 | `-i` | `"normal"` or `"warning"` | Notification severity/icon |
 
+### Discord Embed Schema
+
+| JSON Parameter | Value | Purpose |
+|----------------|-------|---------|
+| `title` | `"✅ ZFS Snapshot & Replication: Success"` or `"❌ ZFS Snapshot & Replication: Failed"` | Embed title header with status icon |
+| `description` | String list of each dataset result | Embed body containing summary lines |
+| `color` | `3066993` (Green) or `15158332` (Red) | Left side bar color indicator |
+| `timestamp` | UTC ISO8601 string | Time of script completion |
+
 ### Output Layout
 
 | Item | Example / Pattern |
