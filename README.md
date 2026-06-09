@@ -2,6 +2,17 @@
 
 This script automates the process of creating snapshots and replicating ZFS datasets on Unraid, making backups and data recovery easier and more reliable. It’s designed for Unraid version 6.12 and above, providing flexible options for both local and remote backups using either ZFS replication.
 
+## Improvements in this Fork
+
+This fork introduces key architectural and usability improvements over the upstream repository:
+
+- **Unified Configuration File (`zfs_manager.conf`)**: Consolidates all user parameters and credentials into a single untracked file.
+- **Discord Status Alerts**: Sends rich embeds with detailed execution summaries directly to Discord upon replication success or failure.
+- **Professional Timestamped Logging**: Adds structured console and file logging with clear severity levels (`[INFO]`, `[WARN]`, `[ERROR]`).
+- **Self-Contained Log Rotation**: Automatically manages log file sizes to prevent filesystem bloat on long-running setups.
+- **Piped Command Output**: Diverts detailed subprocess info (`syncoid`/`sanoid` runs) into logs to keep the console clean.
+- **Interactive Restore Safety**: Requires CLI confirmation before overwriting datasets and utilizes `pv` progress bars for live status feedback of restore process.
+
 ## Features
 
 - **Automated Snapshots**: Uses Sanoid to manage snapshots with a user-defined retention policy.
@@ -28,6 +39,7 @@ Edit the variables at the beginning of the script to match your environment.
 ## Key Differences Between the Original Script and This Modified Version
 
 This modified script builds upon the foundation of the original script by SpaceInvaderOne, with several enhancements and changes to make the backup and replication process more versatile and robust. Below are the key differences:
+
 ### 1. Support for Multiple Pools and Datasets
 
 - **Original Script**: Focuses on processing a single ZFS pool and dataset.
