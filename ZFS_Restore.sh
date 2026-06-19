@@ -10,55 +10,74 @@ trap 'unraid_notify "Script terminated unexpectedly." "failure"' ERR
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 ####################
-# Configuration
-####################
+# Configuration Loader
+# ###################
+config_file="$(dirname "$0")/zfs_manager.conf"
+if [ ! -f "$config_file" ]; then
+  echo "Error: Configuration file '$config_file' not found."
+  echo "Please create it using zfs_manager.conf.example as a template."
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$config_file"
 
-####################
-# Dry Run Mode
-####################
-# Set this to "yes" to simulate the restoration process without making any actual changes.
-# This is useful for testing and ensuring that the script is configured correctly.
-# Set this to "no" to perform the actual restoration.
-dry_run="yes"
-
-####################
-# Dataset(s) to Restore
-####################
-# This is an array where each entry is a ZFS dataset that you want to restore.
-# You can specify a parent dataset (which will restore it and all its children)
-# or a specific child dataset if you want to restore only that.
-# Example:
-#   - To restore a parent dataset and all its children: ("pool1/dataset1")
-#   - To restore only a specific child dataset: ("pool1/dataset1/child1")
-# In this example, we are restoring a dataset named "appdata" from the "cache" pool.
-source_datasets=("cache/appdata")
-
-####################
-# Backup to Restore From
-####################
-# This is the ZFS dataset or pool where your backup (snapshot) is stored.
-# You should replace this with the location of your backup dataset.
-# Example:
-#   - If your backup is stored in "pool1" and it is under the parent dataset "dataset1" set this to "pool1/dataset1"
-# In this example, we are restoring from the "replication" dataset in the "vault" pool.
-destination_dataset="vault/replication"
-
-####################
-# Remote Server Configuration
-# Configure settings if you plan to replicate data from a remote server.
-####################
-destination_remote="no"  # Set to "no" for local, "yes" for remote
-remote_user="root"       # Remote server user (Unraid server typically uses "root")
-remote_server="10.10.20.197" # Remote server's name or IP address
+# Map unified config variables
+log_file="$restore_log_file"
+source_datasets=("${restore_source_datasets[@]}")
+destination_dataset="$restore_destination_dataset"
+destination_remote="$restore_destination_remote"
 
 ####################
 # Main Script
 ####################
 
-####################
-# Function: unraid_notify
-# Wrapper for Unraid's notification system.
-####################
+log_message() {
+    local level="$1"
+    local msg="$2"
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local formatted="[$timestamp] [$level] $msg"
+    echo "$formatted"
+    
+    local log_dir
+    log_dir=$(dirname "$log_file")
+    if [ ! -d "$log_dir" ]; then
+        mkdir -p "$log_dir"
+    fi
+    echo "$formatted" >> "$log_file"
+}
+
+log_info() {
+    log_message "INFO" "$1"
+}
+
+log_warn() {
+    log_message "WARN" "$1"
+}
+
+log_error() {
+    log_message "ERROR" "$1"
+}
+
+rotate_logs() {
+    local max_size=$((log_max_size_mb * 1024 * 1024))
+    if [ -f "$log_file" ]; then
+        local size
+        size=$(wc -c < "$log_file")
+        if [ "$size" -ge "$max_size" ]; then
+            log_info "Log file size exceeded threshold. Rotating logs..."
+            for ((i=log_backups-1; i>=1; i--)); do
+                if [ -f "${log_file}.${i}" ]; then
+                    mv "${log_file}.${i}" "${log_file}.$((i+1))"
+                fi
+            done
+            mv "$log_file" "${log_file}.1"
+            touch "$log_file"
+            log_info "Log rotation complete."
+        fi
+    fi
+}
+
 unraid_notify() {
     local message="$1"
     local flag="$2"
@@ -66,8 +85,10 @@ unraid_notify() {
 
     if [[ $flag == "success" ]]; then
         severity="normal"
+        log_info "Notification: $message"
     elif [[ $flag == "failure" ]]; then
         severity="warning"
+        log_error "Notification: $message"
     fi
 
     /usr/local/emhttp/webGui/scripts/notify -s "Restore Notification" -d "$message" -i "$severity"
@@ -79,9 +100,37 @@ unraid_notify() {
 ####################
 run_restore() {
     if [ "$dry_run" = "yes" ]; then
-        echo "DRY RUN: $*"
+        log_info "DRY RUN: $*"
     else
         eval "$*"
+    fi
+}
+
+####################
+# Function: send_with_progress
+# Pipes zfs send to zfs receive, inserting pv if available.
+####################
+send_with_progress() {
+    local snapshot="$1"
+    local receive_cmd="$2"
+    
+    # Try to get the estimated stream size to display percentage and ETA
+    local size=""
+    if size=$(zfs send -nvP "${snapshot}" 2>/dev/null | awk '$1=="size"{print $2}'); then
+        :
+    fi
+    
+    # Check if pv is installed
+    if ! command -v pv >/dev/null 2>&1; then
+        log_warn "Note: 'pv' command not found. Installing 'pv' (e.g. via NerdTools plugin) will show a progress bar."
+        eval "zfs send \"${snapshot}\" | ${receive_cmd}"
+        return $?
+    fi
+    
+    if [ -n "$size" ] && [ "$size" -gt 0 ] 2>/dev/null; then
+        eval "zfs send \"${snapshot}\" | pv -s \"${size}\" | ${receive_cmd}"
+    else
+        eval "zfs send \"${snapshot}\" | pv | ${receive_cmd}"
     fi
 }
 
@@ -98,9 +147,9 @@ select_snapshot() {
     read -r -p "Enter the snapshot to restore (or press Enter to restore the latest): " selected_snapshot
     if [ -z "$selected_snapshot" ]; then
         selected_snapshot=$(echo "$snaps" | tail -n1)
-        echo "No snapshot selected. Defaulting to the latest snapshot: $selected_snapshot"
+        log_info "No snapshot selected. Defaulting to the latest snapshot: $selected_snapshot"
     fi
-    echo "Selected snapshot: $selected_snapshot"
+    log_info "Selected snapshot: $selected_snapshot"
     latest_snapshot="$selected_snapshot"
 }
 
@@ -110,7 +159,7 @@ select_snapshot() {
 ####################
 check_existing_dataset() {
     if zfs list -H "${source_dataset}" &>/dev/null; then
-        echo "WARNING: The destination dataset ${source_dataset} already exists."
+        log_warn "WARNING: The destination dataset ${source_dataset} already exists."
         read -r -p "Do you want to overwrite it? (yes/no): " confirm
         if [ "$confirm" != "yes" ]; then
             unraid_notify "Restoration aborted by user. ${source_dataset} already exists." "failure"
@@ -131,7 +180,6 @@ restore_snapshot() {
     # verify backup exists
     if ! zfs list -H "${dest}" &>/dev/null; then
         unraid_notify "Backup ${dest} not found." "failure"
-        echo "ERROR: Backup ${dest} not found."
         return 1
     fi
 
@@ -140,12 +188,12 @@ restore_snapshot() {
 
     # Local restore
     if [[ "$destination_remote" == "no" ]]; then
+        local receive_cmd="zfs receive -F \"${dest}\" >> \"${log_file}\" 2>&1"
         if [[ "$dry_run" == "yes" ]]; then
-            echo "DRY RUN: zfs send \"${latest_snapshot}\" | zfs receive -F \"${dest}\""
+            log_info "DRY RUN: zfs send \"${latest_snapshot}\" | pv | zfs receive -F \"${dest}\""
         else
-            echo "Restoring locally → ${dest}"
-            if ! run_restore zfs send "${latest_snapshot}" \
-                 | run_restore zfs receive -F "${dest}"; then
+            log_info "Restoring locally → ${dest}"
+            if ! send_with_progress "${latest_snapshot}" "${receive_cmd}"; then
                 unraid_notify "Local restore failed: ${source_dataset}" "failure"
                 return 1
             fi
@@ -155,13 +203,13 @@ restore_snapshot() {
 
     # Remote restore
     if [[ "$destination_remote" == "yes" ]]; then
+        local receive_cmd="ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${dest}\" >> \"${log_file}\" 2>&1"
         if [[ "$dry_run" == "yes" ]]; then
-            echo "DRY RUN: zfs send \"${latest_snapshot}\" | ssh ${remote_target} zfs receive -F \"${dest}\""
+            log_info "DRY RUN: zfs send \"${latest_snapshot}\" | pv | ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${dest}\""
         else
-            echo "Restoring remotely → ${remote_target}"
-            ssh "${remote_user}@${remote_server}" "zfs create -p \"${dest}\"" 2>/dev/null || true
-            if ! run_restore zfs send "${latest_snapshot}" \
-                 | run_restore ssh "${remote_user}@${remote_server}" zfs receive -F "${dest}"; then
+            log_info "Restoring remotely → ${remote_target}"
+            ssh "${remote_user}@${remote_server}" "zfs create -p \"${dest}\"" >> "$log_file" 2>&1 || true
+            if ! send_with_progress "${latest_snapshot}" "${receive_cmd}"; then
                 unraid_notify "Remote restore failed: ${source_dataset}" "failure"
                 return 1
             fi
@@ -177,14 +225,15 @@ restore_snapshot() {
 # Iterates over each defined dataset, performing restoration tasks (including children).
 ####################
 run_for_each_dataset() {
-    echo "Starting the restoration process for defined datasets."
+    rotate_logs
+    log_info "Starting the restoration process for defined datasets."
 
     local final_status="success"
     local final_message="All datasets were restored successfully."
 
     for source_dataset in "${source_datasets[@]}"; do
-        echo "Processing dataset: ${source_dataset}"
-        echo "  backup location: ${destination_dataset}/${source_dataset//\//_}"
+        log_info "Processing dataset: ${source_dataset}"
+        log_info "  backup location: ${destination_dataset}/${source_dataset//\//_}"
 
         if ! restore_snapshot; then
             final_status="failure"
@@ -207,23 +256,23 @@ run_for_each_dataset() {
 
                 # LOCAL child
                 if [[ "$destination_remote" == "no" ]]; then
+                    local child_receive_cmd="zfs receive -F \"${child_dest}\" >> \"${log_file}\" 2>&1"
                     if [[ "$dry_run" == "yes" ]]; then
-                        echo "DRY RUN: zfs send \"${child_snapshot}\" | zfs receive -F \"${child_dest}\""
+                        log_info "DRY RUN: zfs send \"${child_snapshot}\" | pv | zfs receive -F \"${child_dest}\""
                     else
-                        run_restore zfs send "${child_snapshot}" \
-                          | run_restore zfs receive -F "${child_dest}"
+                        send_with_progress "${child_snapshot}" "${child_receive_cmd}"
                         unraid_notify "Local child restore succeeded: ${child_source}" "success"
                     fi
                 fi
 
                 # REMOTE child
                 if [[ "$destination_remote" == "yes" ]]; then
+                    local child_receive_cmd="ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${child_dest}\" >> \"${log_file}\" 2>&1"
                     if [[ "$dry_run" == "yes" ]]; then
-                        echo "DRY RUN: zfs send \"${child_snapshot}\" | ssh ${child_remote_target%:*} zfs receive -F \"${child_dest}\""
+                        log_info "DRY RUN: zfs send \"${child_snapshot}\" | pv | ssh \"${remote_user}@${remote_server}\" zfs receive -F \"${child_dest}\""
                     else
-                        ssh "${remote_user}@${remote_server}" "zfs create -p \"${child_dest%/*}\"" 2>/dev/null || true
-                        run_restore zfs send "${child_snapshot}" \
-                          | run_restore ssh "${remote_user}@${remote_server}" zfs receive -F "${child_dest}"
+                        ssh "${remote_user}@${remote_server}" "zfs create -p \"${child_dest%/*}\"" >> "$log_file" 2>&1 || true
+                        send_with_progress "${child_snapshot}" "${child_receive_cmd}"
                         unraid_notify "Remote child restore succeeded: ${child_source}" "success"
                     fi
                 fi
@@ -233,10 +282,10 @@ run_for_each_dataset() {
 
     if [[ "$final_status" == "success" ]]; then
         unraid_notify "$final_message" "success"
-        echo "SUMMARY: $final_message"
+        log_info "SUMMARY: $final_message"
     else
         unraid_notify "$final_message" "failure"
-        echo "SUMMARY: $final_message"
+        log_info "SUMMARY: $final_message"
     fi
 }
 

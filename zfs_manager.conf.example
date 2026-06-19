@@ -1,0 +1,94 @@
+# ==============================================================================
+# Unified Configuration for Unraid ZFS Snapshot Manager
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# General & Safety Settings
+# ------------------------------------------------------------------------------
+# Set to "yes" to simulate actions without modifying ZFS pools/datasets.
+# Set to "no" to execute actual snapshot, replication, and restore operations.
+dry_run="yes"
+
+# ------------------------------------------------------------------------------
+# Logging Configuration
+# ------------------------------------------------------------------------------
+# Paths to replication and restoration logs.
+replication_log_file="/var/log/zfs_replication.log"
+restore_log_file="/var/log/zfs_restore.log"
+
+# Max log file size (in Megabytes) before triggering rotation.
+log_max_size_mb="5"
+
+# Number of rotated log backup archives to keep.
+log_backups="3"
+
+# ------------------------------------------------------------------------------
+# Backup & Replication Settings (ZFS_Replication.sh)
+# ------------------------------------------------------------------------------
+# Array of source pools/datasets to snapshot and replicate.
+# Format: ("pool/dataset1" "pool/dataset2")
+source_datasets=("cache/appdata" "cache/unraid_scripts" "cache/compose")
+
+# Enable automatic snapshot creation ("yes" / "no").
+auto_snapshots="yes"
+
+# Automatically prune snapshots older than retention policy ("yes" / "no").
+autoprune_snapshots="yes"
+
+# Snapshot Retention Policy (number of snapshots to keep)
+snapshot_hours="0"
+snapshot_days="7"
+snapshot_weeks="4"
+snapshot_months="3"
+snapshot_years="0"
+
+# Enable replication of snapshots ("yes" / "no").
+replication="yes"
+
+# Remote replication mode: "no" (local only), "yes" (remote only), or "both" (local and remote).
+destination_remote="no"
+
+# Remote SSH connection settings (required if destination_remote is "yes" or "both")
+remote_user="root"
+remote_server="10.10.20.197"
+
+# Local parent dataset path under which replicated backups reside.
+# Format: "pool/dataset" (e.g. "disk20/BACKUP_zfs")
+destination_local_dataset="disk20/BACKUP_zfs"
+
+# Remote parent dataset path under which replicated backups reside.
+# Format: "pool/dataset" (e.g. "vault/replication_remote")
+destination_remote_dataset="vault/replication_remote"
+
+# Syncoid replication mode:
+# - "strict-mirror": Mirrors source strictly, deleting target-only snapshots.
+# - "basic": Standard replication without target snapshot deletion.
+syncoid_mode="strict-mirror"
+
+# Directory where generated Sanoid configuration files are stored.
+sanoid_config_dir="/mnt/user/system/sanoid/"
+
+# ------------------------------------------------------------------------------
+# Restore Settings (ZFS_Restore.sh)
+# ------------------------------------------------------------------------------
+# Array of datasets to restore.
+# Format: ("pool/dataset1" "pool/dataset2")
+restore_source_datasets=("cache/appdata")
+
+# Parent dataset/pool containing the backups to restore from.
+restore_destination_dataset="vault/replication"
+
+# Restore source location type: "no" for local backup pool, "yes" for remote backup server.
+restore_destination_remote="no"
+
+# ------------------------------------------------------------------------------
+# Notification Settings
+# ------------------------------------------------------------------------------
+# Unraid GUI Notification type: "all" (success & failure), "error" (failures only), or "none".
+notification_type="all"
+
+# Enable/Disable Discord Webhook Status Alerts ("yes" / "no").
+discord_notifications="no"
+
+# Discord Webhook URL for status embeds (replace with your actual Webhook URL).
+discord_webhook_url="https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
